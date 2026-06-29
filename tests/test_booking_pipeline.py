@@ -15,10 +15,11 @@ from models import BookTransferRequest
 class FakeSession:
     def __init__(self, vehicle_html=None):
         self.vehicle_html = vehicle_html or """
-            <input value="1" name="aracid" checked>
-            <input value="2500" name="fiyatal1">
-            <input value="MERCEDES VITO" name="baslikal1">
-            <label for="aracid1">Mercedes Vito</label>
+            <input type="radio" name="arac" value="1" id="arac1" checked>
+            <input id="baslikal1" type="hidden" value="MERCEDES VITO">
+            <input id="aracal1" type="hidden" value="1">
+            <input id="fiyatal1" type="hidden" value="2500">
+            <label for="arac1">Mercedes Vito</label>
         """
         self.posts = []
 
@@ -59,10 +60,11 @@ class BookingPipelineTests(unittest.TestCase):
 
     def test_vehicle_parser_accepts_value_before_name(self):
         html = """
-            <input value="7" checked name="aracid">
-            <input value="3150" name="fiyatal7">
-            <input value="VIP VAN" name="baslikal7">
-            <label for="aracid7">VIP Van</label>
+            <input type="radio" name="arac" value="7" id="arac7" checked>
+            <input id="baslikal7" type="hidden" value="VIP VAN">
+            <input id="aracal7" type="hidden" value="7">
+            <input id="fiyatal7" type="hidden" value="3150">
+            <label for="arac7">VIP Van</label>
         """
 
         vehicles = parsers.parse_vehicle_options(html)

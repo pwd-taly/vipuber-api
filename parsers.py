@@ -20,22 +20,11 @@ def strip_html_tags(text: str) -> str:
 
 
 def extract_input_value(html: str, name: str) -> Optional[str]:
-    """Extract the value attribute of an <input> by its name."""
-    m = re.search(
-        r'<input[^>]*name=[\'"]' + re.escape(name) + r'[\'"][^>]*value=[\'"]([^\'"]*)[\'"]',
-        html,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        return m.group(1)
-    # Try reversed attribute order
-    m = re.search(
-        r'<input[^>]*value=[\'"]([^\'"]*)[\'"][^>]*name=[\'"]' + re.escape(name) + r'[\'"]',
-        html,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        return m.group(1)
+    """Extract the value attribute of an <input> by its name or id."""
+    for tag in re.findall(r"<input\b[^>]*>", html, re.IGNORECASE | re.DOTALL):
+        attrs = _extract_tag_attributes(tag)
+        if attrs.get("name") == name or attrs.get("id") == name:
+            return attrs.get("value", "")
     return None
 
 
@@ -87,16 +76,18 @@ def parse_vehicle_options(html: str) -> list[dict]:
     for m in re.finditer(r"<input\b[^>]*>", html, re.IGNORECASE | re.DOTALL):
         tag = m.group(0)
         attrs = _extract_tag_attributes(tag)
-        if attrs.get("name") != "aracid":
+        field_name = attrs.get("name")
+        if field_name not in {"aracid", "arac"}:
             continue
 
-        vid = attrs.get("value", "").strip()
+        choice_id = attrs.get("value", "").strip()
+        vid = (extract_input_value(html, f"aracal{choice_id}") or choice_id).strip()
         if not vid:
             continue
 
         is_checked = "checked" in attrs or re.search(r"\bchecked\b", tag, re.IGNORECASE) is not None
         vname = ""
-        for label_for in (f"aracid{vid}", vid):
+        for label_for in (f"arac{choice_id}", f"aracid{choice_id}", choice_id, vid):
             nm = re.search(
                 r'<label[^>]*for=[\'"]' + re.escape(label_for) + r'[\'"][^>]*>(.*?)</label>',
                 html,
@@ -106,8 +97,8 @@ def parse_vehicle_options(html: str) -> list[dict]:
                 vname = strip_html_tags(nm.group(1))
                 break
 
-        price = extract_input_value(html, f"fiyatal{vid}") or ""
-        cap = extract_input_value(html, f"baslikal{vid}") or attrs.get("data-baslik", "")
+        price = extract_input_value(html, f"fiyatal{choice_id}") or ""
+        cap = extract_input_value(html, f"baslikal{choice_id}") or attrs.get("data-baslik", "")
         vehicles.append({
             "id": vid,
             "name": vname or cap or f"Vehicle {vid}",
