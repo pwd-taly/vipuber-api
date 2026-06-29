@@ -71,35 +71,46 @@ def extract_table_rows(html: str) -> list[dict]:
 # ── Booking parsers ─────────────────────────────────
 
 
+def _extract_tag_attributes(tag: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for m in re.finditer(r'([:\w-]+)\s*=\s*([\'"])(.*?)\2', tag, re.DOTALL):
+        attrs[m.group(1).lower()] = m.group(3)
+    return attrs
+
+
 def parse_vehicle_options(html: str) -> list[dict]:
     """Extract vehicle options from the SepetGuncel / ajax.php response.
 
     Returns list of {id, name, price, currency, passenger_capacity, is_selected}.
     """
     vehicles = []
-    # Find vehicle radio inputs
-    for m in re.finditer(
-        r'<input[^>]*name=[\'"]aracid[\'"][^>]*value=[\'"]([^\'"]+)[\'"]([^>]*)>',
-        html,
-        re.IGNORECASE,
-    ):
-        vid = m.group(1)
-        is_checked = "checked" in m.group(2).lower()
-        # Get vehicle name
+    for m in re.finditer(r"<input\b[^>]*>", html, re.IGNORECASE | re.DOTALL):
+        tag = m.group(0)
+        attrs = _extract_tag_attributes(tag)
+        if attrs.get("name") != "aracid":
+            continue
+
+        vid = attrs.get("value", "").strip()
+        if not vid:
+            continue
+
+        is_checked = "checked" in attrs or re.search(r"\bchecked\b", tag, re.IGNORECASE) is not None
         vname = ""
-        nm = re.search(
-            r'<label[^>]*for=[\'"]aracid' + re.escape(vid) + r'[\'"]>(.*?)</label>',
-            html,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if nm:
-            vname = strip_html_tags(nm.group(1))
-        # Get price
+        for label_for in (f"aracid{vid}", vid):
+            nm = re.search(
+                r'<label[^>]*for=[\'"]' + re.escape(label_for) + r'[\'"][^>]*>(.*?)</label>',
+                html,
+                re.DOTALL | re.IGNORECASE,
+            )
+            if nm:
+                vname = strip_html_tags(nm.group(1))
+                break
+
         price = extract_input_value(html, f"fiyatal{vid}") or ""
-        cap = extract_input_value(html, f"baslikal{vid}") or ""
+        cap = extract_input_value(html, f"baslikal{vid}") or attrs.get("data-baslik", "")
         vehicles.append({
             "id": vid,
-            "name": vname or cap,
+            "name": vname or cap or f"Vehicle {vid}",
             "price": price,
             "currency": "TL",
             "passenger_capacity": cap,

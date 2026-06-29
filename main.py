@@ -15,6 +15,7 @@ import re
 import time
 import hashlib
 import threading
+from datetime import datetime
 from contextlib import asynccontextmanager
 from collections import defaultdict
 
@@ -46,39 +47,64 @@ _booking_dedup_lock = threading.Lock()
 _DEDUP_WINDOW_SECONDS = 300  # 5-minute window
 _MAX_DEDUP_ENTRIES = 1000
 
-def _is_duplicate_booking(pickup: str, dest: str, date: str, time: str,
+def _booking_fingerprint(pickup: str, dest: str, date: str, pickup_time: str,
+                         first_name: str, last_name: str, phone: str) -> str:
+    return hashlib.sha256(
+        f"{pickup}|{dest}|{date}|{pickup_time}|{first_name}|{last_name}|{phone}".encode()
+    ).hexdigest()
+
+
+def _purge_duplicate_bookings(now: float) -> None:
+    stale = [k for k, ts in _booking_dedup.items() if now - ts > _DEDUP_WINDOW_SECONDS]
+    for k in stale:
+        _booking_dedup.pop(k, None)
+
+
+def _is_duplicate_booking(pickup: str, dest: str, date: str, pickup_time: str,
                           first_name: str, last_name: str, phone: str) -> bool:
-    """Check if an identical booking was submitted recently.
+    """Check if an identical successful booking was submitted recently.
 
     Thread-safe: all access to _booking_dedup is serialized.
     """
-    fingerprint = hashlib.sha256(
-        f"{pickup}|{dest}|{date}|{time}|{first_name}|{last_name}|{phone}".encode()
-    ).hexdigest()
+    fingerprint = _booking_fingerprint(
+        pickup, dest, date, pickup_time, first_name, last_name, phone
+    )
     now = time.time()
 
     with _booking_dedup_lock:
-        # Purge expired entries
-        stale = [k for k, ts in _booking_dedup.items() if now - ts > _DEDUP_WINDOW_SECONDS]
-        for k in stale:
-            _booking_dedup.pop(k, None)
+        _purge_duplicate_bookings(now)
+        return fingerprint in _booking_dedup
 
-        if fingerprint in _booking_dedup:
-            return True
 
-        # Enforce max size
+def _remember_booking(pickup: str, dest: str, date: str, pickup_time: str,
+                      first_name: str, last_name: str, phone: str) -> None:
+    fingerprint = _booking_fingerprint(
+        pickup, dest, date, pickup_time, first_name, last_name, phone
+    )
+    now = time.time()
+
+    with _booking_dedup_lock:
+        _purge_duplicate_bookings(now)
         if len(_booking_dedup) >= _MAX_DEDUP_ENTRIES:
             oldest = min(_booking_dedup, key=_booking_dedup.get)
             _booking_dedup.pop(oldest, None)
-
         _booking_dedup[fingerprint] = now
-        return False
 
 # ── Turkish-aware uppercase ─────────────────────────────
 
 def turkish_upper(s: str) -> str:
     """Turkish-aware uppercase: maps 'i' → 'İ' before standard upper()."""
     return s.replace("i", "İ").upper()
+
+
+def php_date(value: str) -> str:
+    """Convert public DD.MM.YYYY dates into the legacy PHP form date format."""
+    if not value:
+        return ""
+    try:
+        return datetime.strptime(value, "%d.%m.%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return value
 
 
 # ── Setup ─────────────────────────────────────────────
@@ -497,12 +523,12 @@ def book_transfer(req: BookTransferRequest):
     hotel_id = req.hotel_id or cid
     payload = {
         # Date/Time
-        "alistarihi": req.date,
+        "alistarihi": php_date(req.date),
         "alissaati": req.time,
         "donus": "1" if req.return_trip else "0",
-        "donustarihi": req.return_date if req.return_trip else "",
+        "donustarihi": php_date(req.return_date) if req.return_trip else "",
         "donussaati": req.return_time if req.return_trip else "",
-        "bitistarih": req.return_date if req.return_trip else "",
+        "bitistarih": php_date(req.return_date) if req.return_trip else "",
         "bitissaat": req.return_time if req.return_trip else "",
         # Flight
         "ucusno": req.flight,
@@ -524,9 +550,11 @@ def book_transfer(req: BookTransferRequest):
         "ulke": req.nationality or "TR",
         "odano": req.room_no or "",
         "cepulke": "90",
-        # Vehicle & Pricing (let server auto-calculate)
+        # Vehicle & Pricing
         "aracid": vid,
         "aracadi": vname,
+        "totalucret": str(vprice or "0"),
+        "ucret": str(vprice or "0"),
         "kur": req.currency,
         "yetiskin": str(req.passenger_count),
         "cocuk": "0",
@@ -564,6 +592,11 @@ def book_transfer(req: BookTransferRequest):
 
     # Parse result
     result = parsers.parse_booking_message(result_html)
+    if result.get("status") == "success" or result.get("tracking_code"):
+        _remember_booking(
+            req.pickup, req.destination, req.date, req.time,
+            req.first_name, req.last_name, req.phone,
+        )
 
     # Try to fetch real price from reservation detail
     tracking = result.get("tracking_code")
