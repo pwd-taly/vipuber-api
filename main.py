@@ -16,6 +16,7 @@ import time
 import hashlib
 import threading
 from contextlib import asynccontextmanager
+from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -139,15 +140,36 @@ Full docs at /docs (Swagger) or /redoc.
     },
 )
 
-# ── CORS (critical for AI agents and web clients) ────
-
+# ── CORS — restricted; native apps don't need it, browsers do ──
+# If a web client needs access, add its origin here.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://vipuber-api.onrender.com",  # Swagger docs
+    ],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "Content-Type"],
 )
+
+_rate_limits: dict[str, list[float]] = defaultdict(list)
+_RATE_WINDOW = 60     # seconds
+_RATE_MAX = 30        # requests per window
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = _rate_limits[client_ip]
+    # Purge old entries
+    _rate_limits[client_ip] = [t for t in window if now - t < _RATE_WINDOW]
+    if len(_rate_limits[client_ip]) >= _RATE_MAX:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests. Slow down."},
+        )
+    _rate_limits[client_ip].append(now)
+    return await call_next(request)
 
 # ── API key auth ─────────────────────────────────────
 
