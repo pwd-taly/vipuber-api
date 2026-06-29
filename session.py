@@ -1,5 +1,6 @@
 """VipUber session management with auto-reconnect on expiry."""
 
+import hashlib
 import io
 import time
 import threading
@@ -237,8 +238,14 @@ class VipUberSession:
 
 # ── global session registry ──────────────────────────────
 
-_sessions: dict[str, VipUberSession] = {}
+_sessions: dict[tuple[str, str], VipUberSession] = {}
 _sessions_lock = threading.Lock()
+
+
+def _session_key(email: str, password: str) -> tuple[str, str]:
+    normalized_email = email.strip().lower()
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return normalized_email, password_hash
 
 
 def get_session(email: str = None, password: str = None) -> VipUberSession:
@@ -248,20 +255,22 @@ def get_session(email: str = None, password: str = None) -> VipUberSession:
     Thread-safe: protects the global session dict with a lock.
     """
     settings = get_settings()
-    email = email or settings.email
+    email = (email or settings.email).strip()
     password = password or settings.password
 
-    key = email
+    key = _session_key(email, password)
     with _sessions_lock:
-        if key not in _sessions:
-            _sessions[key] = VipUberSession(
+        session = _sessions.get(key)
+        if session is None:
+            session = VipUberSession(
                 email=email,
                 password=password,
                 base_url=settings.base_url,
                 customer_id=settings.customer_id,
                 timeout=settings.request_timeout,
             )
-        return _sessions[key]
+            _sessions[key] = session
+        return session
 
 
 def login(email: str = None, password: str = None) -> dict:
