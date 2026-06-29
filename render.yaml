@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: vipuber-api
+    runtime: python
+    buildCommand: |
+      apt-get update && apt-get install -y tesseract-ocr
+      pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: VIPUBER_EMAIL
+        sync: false
+      - key: VIPUBER_PASSWORD
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: VIPUBER_BASE_URL
+        value: https://booking.vipuber.net
+      - key: VIPUBER_CUSTOMER_ID
+        value: "447"
+      - key: LOG_LEVEL
+        value: INFO
